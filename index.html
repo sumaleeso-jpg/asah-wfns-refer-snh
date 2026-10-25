@@ -544,4 +544,509 @@ renderStats();
 
 // Outcome-only additions: retain reason for unassessable measures in local form and sync display.
 ['na-reason','evidence-source','event-abnormal-value','event-notify-time'].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener('input',()=>{if(id.startsWith('event-')){const target=document.getElementById('handover-event-followup');if(target && eventPresence()==='yes'){const extra=[document.getElementById('event-abnormal-value')?.value,document.getElementById('event-notify-time')?.value].filter(Boolean).join(' | ');if(extra)target.dataset.additional=extra;}}})});
-</script></body></html>
+</script>
+ 
+<!-- aSAH WFNS: ADD HISTORY TAB + PRINT -->
+<style id="asah-history-css">
+#asah-history{
+  display:none;
+  width:min(1100px,96%);
+  margin:18px auto;
+  padding:20px;
+  background:#fff;
+  color:#17324c;
+  border-radius:10px;
+  font-family:"Sarabun",Arial,sans-serif;
+}
+#asah-history h2{
+  background:#224d97;
+  color:white;
+  padding:12px;
+  font-size:19px;
+}
+#asah-history input{
+  padding:9px;
+  border:1px solid #a9bac8;
+  border-radius:5px;
+  max-width:100%;
+}
+#asah-history button{
+  background:#205b8a;
+  color:white;
+  border:0;
+  border-radius:5px;
+  padding:9px 12px;
+  margin:3px;
+  cursor:pointer;
+}
+#asah-history .h-actions{
+  display:flex;
+  gap:7px;
+  flex-wrap:wrap;
+  margin:12px 0;
+  align-items:center;
+}
+#asah-history .h-print{background:#14714d}
+#asah-history table{
+  border-collapse:collapse;
+  width:100%;
+  font-size:13px;
+}
+#asah-history th,#asah-history td{
+  border:1px solid #bdcbd7;
+  padding:8px;
+  text-align:left;
+}
+#asah-history th{background:#e5eff7}
+#asah-history .h-table{overflow-x:auto}
+#asah-history .h-note{
+  background:#eff6fb;
+  padding:10px;
+  border-left:4px solid #2779aa;
+}
+@media print{
+  @page{size:A4 landscape;margin:6mm}
+  .toolbar,#asah-history{
+    display:none!important;
+  }
+  main.module:not(.active){
+    display:none!important;
+  }
+  main.module.active{
+    display:block!important;
+    margin:0!important;
+    padding:0!important;
+  }
+  #care-section > .page,
+  #outcome-section > .page,
+  #stats-section .stats-sheet{
+    width:100%!important;
+    max-width:100%!important;
+    min-height:0!important;
+    height:auto!important;
+    margin:0!important;
+    padding:2mm!important;
+    box-shadow:none!important;
+    overflow:visible!important;
+  }
+  .item,.patient,.event-panel,
+  .handover-summary,.sign,
+  .outcome-table tr,.flow tr{
+    break-inside:avoid;
+    page-break-inside:avoid;
+  }
+  table{max-width:100%}
+  thead{display:table-header-group}
+  *{
+    -webkit-print-color-adjust:exact!important;
+    print-color-adjust:exact!important;
+  }
+}
+</style>
+
+<script id="asah-history-js">
+(function(){
+"use strict";
+
+const KEY="asah_history_demo_cases_v1";
+const CARE="care-section";
+const OUTCOME="outcome-section";
+const STATS="stats-section";
+
+const originalTabs=[
+  "tab-care",
+  "tab-outcome",
+  "tab-stats"
+];
+
+const modules=[CARE,OUTCOME,STATS];
+const toolbar=document.querySelector(".topnav");
+
+if(!toolbar || !document.getElementById(CARE)
+   || !document.getElementById(OUTCOME)) return;
+
+if(document.getElementById("tab-history")) return;
+
+let currentId=null;
+let printInProgress=false;
+
+function readCases(){
+  try{
+    const data=JSON.parse(
+      localStorage.getItem(KEY)||"[]"
+    );
+    return Array.isArray(data)?data:[];
+  }catch(e){
+    return [];
+  }
+}
+
+function writeCases(cases){
+  localStorage.setItem(KEY,JSON.stringify(cases));
+}
+
+function fields(id){
+  return [...document.querySelectorAll(
+    "#"+id+" input,#"+id+" select,#"+id+" textarea"
+  )];
+}
+
+function snapshot(id){
+  return fields(id).map(el=>({
+    type:el.type||"",
+    value:el.value,
+    checked:el.checked===true
+  }));
+}
+
+function restore(id,data){
+  if(!Array.isArray(data))return;
+
+  fields(id).forEach((el,i)=>{
+    const saved=data[i];
+    if(!saved)return;
+
+    if(el.type==="checkbox"||el.type==="radio"){
+      el.checked=!!saved.checked;
+    }else{
+      el.value=saved.value??"";
+    }
+
+    el.dispatchEvent(new Event(
+      "input",{bubbles:true}
+    ));
+    el.dispatchEvent(new Event(
+      "change",{bubbles:true}
+    ));
+  });
+}
+
+const btn=document.createElement("button");
+btn.type="button";
+btn.id="tab-history";
+btn.className="navbutton";
+btn.textContent="4. ประวัติรายเคส";
+
+toolbar.insertBefore(
+  btn,document.getElementById("print")
+);
+
+const panel=document.createElement("section");
+panel.id="asah-history";
+
+panel.innerHTML=`
+<h2>4. ประวัติรายเคส aSAH WFNS</h2>
+
+<p class="h-note">
+บันทึกแบบฟอร์มกิจกรรมการพยาบาล
+และแบบประเมินผลลัพธ์แยกตามรหัสเคส
+เปิดดู แก้ไข และพิมพ์ย้อนหลังได้
+</p>
+
+<div class="h-actions">
+  <input id="h-code" type="text"
+    maxlength="50"
+    placeholder="รหัสสมมติ CASE-001">
+
+  <button id="h-save" type="button">
+    บันทึกเคสปัจจุบัน
+  </button>
+
+  <button id="h-new" type="button">
+    เริ่มเคสใหม่
+  </button>
+</div>
+
+<p id="h-status"></p>
+
+<div class="h-actions">
+  <input id="h-search" type="text"
+    placeholder="ค้นหารหัสเคสย้อนหลัง">
+
+  <button id="h-refresh" type="button">
+    แสดงทั้งหมด
+  </button>
+</div>
+
+<div id="h-list" class="h-table"></div>
+
+<p class="h-note">
+ข้อมูลทดลองเก็บเฉพาะใน Chrome
+ของเครื่องนี้ ยังไม่เชื่อม Supabase
+ห้ามบันทึกข้อมูลระบุตัวผู้ป่วยจริง
+</p>
+`;
+
+toolbar.insertAdjacentElement(
+  "afterend",panel
+);
+
+function say(s){
+  document.getElementById("h-status")
+    .textContent=s;
+}
+
+function showHistory(){
+  modules.forEach(id=>{
+    document.getElementById(id)
+      ?.classList.remove("active");
+  });
+
+  originalTabs.forEach(id=>{
+    document.getElementById(id)
+      ?.classList.remove("selected");
+  });
+
+  btn.classList.add("selected");
+  panel.style.display="block";
+  render();
+}
+
+function showModule(id){
+  panel.style.display="none";
+  btn.classList.remove("selected");
+
+  const tab=originalTabs[modules.indexOf(id)];
+  if(tab){
+    document.getElementById(tab)?.click();
+  }
+
+  modules.forEach(mid=>{
+    document.getElementById(mid)
+      ?.classList.toggle("active",mid===id);
+  });
+
+  originalTabs.forEach((tid,i)=>{
+    document.getElementById(tid)
+      ?.classList.toggle(
+        "selected",modules[i]===id
+      );
+  });
+}
+
+btn.addEventListener("click",showHistory);
+
+originalTabs.forEach(id=>{
+  document.getElementById(id)
+    ?.addEventListener("click",()=>{
+      panel.style.display="none";
+      btn.classList.remove("selected");
+    });
+});
+
+function save(){
+  const code=document.getElementById(
+    "h-code"
+  ).value.trim();
+
+  if(!/^[A-Za-z0-9_-]{3,50}$/.test(code)){
+    alert("ระบุรหัสเคสสมมติ เช่น CASE-001");
+    return;
+  }
+
+  const cases=readCases();
+
+  if(cases.some(x=>
+    x.code.toLowerCase()===code.toLowerCase()
+    &&x.id!==currentId
+  )){
+    alert("มีรหัสนี้แล้ว กรุณาเปิดประวัติเดิม");
+    return;
+  }
+
+  const old=cases.find(x=>x.id===currentId);
+
+  const rec={
+    id:currentId||(
+      crypto.randomUUID?.()||
+      String(Date.now())
+    ),
+    code,
+    createdAt:old?.createdAt||
+      new Date().toISOString(),
+    updatedAt:new Date().toISOString(),
+    care:snapshot(CARE),
+    outcome:snapshot(OUTCOME)
+  };
+
+  const idx=cases.findIndex(x=>x.id===rec.id);
+
+  if(idx===-1)cases.push(rec);
+  else cases[idx]=rec;
+
+  try{
+    writeCases(cases);
+    currentId=rec.id;
+    say("บันทึก "+code+" สำเร็จ");
+    render();
+    alert("บันทึกเคสสำเร็จ");
+  }catch(e){
+    alert("ไม่สามารถบันทึกได้: "+e.message);
+  }
+}
+
+function openCase(id,section){
+  const rec=readCases().find(x=>x.id===id);
+
+  if(!rec){
+    alert("ไม่พบเคส");
+    return false;
+  }
+
+  restore(CARE,rec.care);
+  restore(OUTCOME,rec.outcome);
+
+  currentId=rec.id;
+
+  document.getElementById("h-code")
+    .value=rec.code;
+
+  say("เปิดเคส "+rec.code);
+
+  showModule(section);
+  return true;
+}
+
+function printCase(id,section){
+  if(printInProgress)return;
+  printInProgress=true;
+
+  if(!openCase(id,section)){
+    printInProgress=false;
+    return;
+  }
+
+  requestAnimationFrame(()=>{
+    requestAnimationFrame(()=>{
+      window.print();
+      printInProgress=false;
+    });
+  });
+}
+
+function newCase(){
+  if(!confirm(
+    "เริ่มเคสใหม่? ข้อมูลที่ยังไม่บันทึกจะหาย"
+  ))return;
+
+  [CARE,OUTCOME].forEach(id=>{
+    fields(id).forEach(el=>{
+      if(el.type==="checkbox"||
+         el.type==="radio"){
+        el.checked=false;
+      }else if(el.tagName==="SELECT"){
+        el.selectedIndex=0;
+      }else{
+        el.value="";
+      }
+
+      el.dispatchEvent(new Event(
+        "change",{bubbles:true}
+      ));
+    });
+  });
+
+  currentId=null;
+  document.getElementById("h-code").value="";
+  say("พร้อมเริ่มเคสใหม่");
+  showModule(CARE);
+}
+
+function action(label,fn,print=false){
+  const b=document.createElement("button");
+  b.type="button";
+  b.textContent=label;
+  if(print)b.className="h-print";
+  b.addEventListener("click",fn);
+  return b;
+}
+
+function render(){
+  const q=document.getElementById(
+    "h-search"
+  ).value.trim().toLowerCase();
+
+  const list=document.getElementById("h-list");
+  list.replaceChildren();
+
+  const cases=readCases()
+    .filter(c=>c.code.toLowerCase().includes(q))
+    .sort((a,b)=>
+      b.updatedAt.localeCompare(a.updatedAt)
+    );
+
+  if(!cases.length){
+    list.textContent="ยังไม่มีประวัติรายเคส";
+    return;
+  }
+
+  const table=document.createElement("table");
+  const thead=document.createElement("thead");
+  const tr=document.createElement("tr");
+
+  ["รหัสเคส","บันทึกล่าสุด","ดู / พิมพ์"]
+    .forEach(t=>{
+      const th=document.createElement("th");
+      th.textContent=t;
+      tr.appendChild(th);
+    });
+
+  thead.appendChild(tr);
+  table.appendChild(thead);
+
+  const tbody=document.createElement("tbody");
+
+  cases.forEach(c=>{
+    const row=document.createElement("tr");
+
+    const td1=document.createElement("td");
+    td1.textContent=c.code;
+
+    const td2=document.createElement("td");
+    td2.textContent=new Date(
+      c.updatedAt
+    ).toLocaleString("th-TH");
+
+    const td3=document.createElement("td");
+
+    td3.append(
+      action("ดูกิจกรรม",()=>
+        openCase(c.id,CARE)
+      ),
+      action("ดูผลประเมิน",()=>
+        openCase(c.id,OUTCOME)
+      ),
+      action("พิมพ์กิจกรรม",()=>
+        printCase(c.id,CARE),true
+      ),
+      action("พิมพ์ผลประเมิน",()=>
+        printCase(c.id,OUTCOME),true
+      )
+    );
+
+    row.append(td1,td2,td3);
+    tbody.appendChild(row);
+  });
+
+  table.appendChild(tbody);
+  list.appendChild(table);
+}
+
+document.getElementById("h-save")
+  .addEventListener("click",save);
+
+document.getElementById("h-new")
+  .addEventListener("click",newCase);
+
+document.getElementById("h-search")
+  .addEventListener("input",render);
+
+document.getElementById("h-refresh")
+  .addEventListener("click",render);
+
+render();
+})();
+</script>
+<!-- END aSAH HISTORY -->
+
+</body></html>
